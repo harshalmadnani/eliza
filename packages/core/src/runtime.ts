@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { names, uniqueNamesGenerator } from "unique-names-generator";
 import { v4 as uuidv4, v4 } from "uuid";
 import {
@@ -50,17 +49,9 @@ import {
     type Task
 } from "./types.ts";
 import { stringToUuid } from "./uuid.ts";
+import { IFileLoader } from "./fileLoader.ts";
 
 // Utility functions
-function isDirectoryItem(item: any): item is DirectoryItem {
-    return (
-        typeof item === "object" &&
-        item !== null &&
-        "directory" in item &&
-        typeof item.directory === "string"
-    );
-}
-
 function formatKnowledge(knowledge: KnowledgeItem[]): string {
     return knowledge
         .map((knowledge) => `- ${knowledge.content.text}`)
@@ -71,12 +62,10 @@ function formatKnowledge(knowledge: KnowledgeItem[]): string {
  * Manages knowledge-related operations for the agent runtime
  */
 class KnowledgeManager {
-    private knowledgeRoot: string;
     private runtime: AgentRuntime;
 
-    constructor(runtime: AgentRuntime, knowledgeRoot: string) {
+    constructor(runtime: AgentRuntime) {
         this.runtime = runtime;
-        this.knowledgeRoot = knowledgeRoot;
     }
 
     private async handleProcessingError(error: any, context: string) {
@@ -127,15 +116,13 @@ class MemoryManagerService {
     private runtime: IAgentRuntime;
     private memoryManagers: Map<string, IMemoryManager>;
 
-    constructor(runtime: IAgentRuntime, knowledgeRoot: string) {
+    constructor(runtime: IAgentRuntime) {
         this.runtime = runtime;
         this.memoryManagers = new Map();
-
-        // Initialize default memory managers
-        this.initializeDefaultManagers(knowledgeRoot);
+        this.initializeDefaultManagers();
     }
 
-    private initializeDefaultManagers(knowledgeRoot: string) {
+    private initializeDefaultManagers() {
         // Message manager for storing messages
         this.registerMemoryManager(new MemoryManager({
             runtime: this.runtime,
@@ -238,7 +225,7 @@ export class AgentRuntime implements IAgentRuntime {
 
     public adapters: Adapter[];
 
-    private readonly knowledgeRoot: string;
+    private readonly fileLoader: IFileLoader;
     private readonly memoryManagerService: MemoryManagerService;
 
     models = new Map<ModelClass, ((params: any) => Promise<any>)[]>();
@@ -253,6 +240,7 @@ export class AgentRuntime implements IAgentRuntime {
         databaseAdapter?: IDatabaseAdapter;
         cacheManager?: ICacheManager;
         adapters?: Adapter[];
+        fileLoader: IFileLoader;
     }) {
         // use the character id if it exists, otherwise use the agentId if it is passed in, otherwise use the character name
         this.agentId =
@@ -262,19 +250,7 @@ export class AgentRuntime implements IAgentRuntime {
         this.character = opts.character;
 
         logger.debug(
-            `[AgentRuntime] Process working directory: ${process.cwd()}`,
-        );
-
-        // Define the root path once
-        this.knowledgeRoot = join(
-            process.cwd(),
-            "..",
-            "characters",
-            "knowledge",
-        );
-
-        logger.debug(
-            `[AgentRuntime] Process knowledgeRoot: ${this.knowledgeRoot}`,
+            `[AgentRuntime] Initializing runtime for ${this.character.name}`
         );
 
         this.#conversationLength =
@@ -292,7 +268,9 @@ export class AgentRuntime implements IAgentRuntime {
             this.cacheManager = opts.cacheManager;
         }
 
-        this.memoryManagerService = new MemoryManagerService(this, this.knowledgeRoot);
+        this.fileLoader = opts.fileLoader;
+
+        this.memoryManagerService = new MemoryManagerService(this);
         const plugins = opts?.plugins ?? [];
 
         for (const plugin of plugins) {
@@ -465,8 +443,12 @@ export class AgentRuntime implements IAgentRuntime {
     }
 
     private async processCharacterKnowledge(items: string[]) {
-        const knowledgeManager = new KnowledgeManager(this, this.knowledgeRoot);
-        await knowledgeManager.processCharacterKnowledge(items);
+        const hasKnowledge = await this.fileLoader.hasKnowledge(this.character.id);
+        if (hasKnowledge) {
+            const knowledgeItems = await this.fileLoader.loadKnowledge(this.character.id);
+            const knowledgeManager = new KnowledgeManager(this);
+            await knowledgeManager.processCharacterKnowledge(knowledgeItems);
+        }
     }
 
     setSetting(key: string, value: string | boolean | null | any, secret = false) {

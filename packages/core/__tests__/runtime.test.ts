@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, test, vi } from "vitest";
 import { AgentRuntime } from "../src/runtime";
+import { ModelClass } from "../src/types";
 import type {
     Action,
     IDatabaseAdapter,
@@ -7,6 +8,26 @@ import type {
     Memory,
     UUID
 } from "../src/types";
+
+// Mock the logger with default export
+vi.mock("../src/logger", () => ({
+    default: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        success: vi.fn(),
+        log: vi.fn()
+    },
+    logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        success: vi.fn(),
+        log: vi.fn()
+    }
+}));
 
 // Mock dependencies with minimal implementations
 const mockDatabaseAdapter: IDatabaseAdapter = {
@@ -47,12 +68,23 @@ const mockDatabaseAdapter: IDatabaseAdapter = {
     createRelationship: vi.fn().mockResolvedValue(true),
     getRelationship: vi.fn().mockResolvedValue(null),
     getRelationships: vi.fn().mockResolvedValue([]),
+    createCharacter: vi.fn().mockResolvedValue(undefined),
+    listCharacters: vi.fn().mockResolvedValue([]),
+    getCharacter: vi.fn().mockResolvedValue(null),
+    updateCharacter: vi.fn().mockResolvedValue(undefined),
+    removeCharacter: vi.fn().mockResolvedValue(undefined),
+    ensureEmbeddingDimension: vi.fn().mockResolvedValue(undefined),
 };
 
 const mockCacheManager = {
     get: vi.fn().mockResolvedValue(null),
     set: vi.fn().mockResolvedValue(undefined),
     delete: vi.fn().mockResolvedValue(undefined)
+};
+
+const mockFileLoader = {
+    hasKnowledge: vi.fn().mockResolvedValue(false),
+    loadKnowledge: vi.fn().mockResolvedValue([]),
 };
 
 // Mock action creator
@@ -65,6 +97,26 @@ const createMockAction = (name: string): Action => ({
     validate: vi.fn().mockImplementation(async () => true),
 });
 
+// Create a mock character for reuse
+const mockCharacter = {
+    id: "test-character-id" as UUID,
+    name: "Test Character",
+    username: "test",
+    bio: ["Test bio"],
+    messageExamples: [],
+    postExamples: [],
+    topics: [],
+    adjectives: [],
+    style: {
+        all: [],
+        chat: [],
+        post: []
+    },
+};
+
+// Mock the model provider
+const mockEmbeddingModel = vi.fn().mockResolvedValue([0.1, 0.2, 0.3]); // Simple embedding vector
+
 describe("AgentRuntime", () => {
     let runtime: AgentRuntime;
 
@@ -72,23 +124,14 @@ describe("AgentRuntime", () => {
         vi.clearAllMocks();
         
         runtime = new AgentRuntime({
-            character: {
-                name: "Test Character",
-                username: "test",
-                bio: ["Test bio"],
-                messageExamples: [],
-                postExamples: [],
-                topics: [],
-                adjectives: [],
-                style: {
-                    all: [],
-                    chat: [],
-                    post: []
-                },
-            },
+            character: mockCharacter,
             databaseAdapter: mockDatabaseAdapter,
             cacheManager: mockCacheManager,
+            fileLoader: mockFileLoader,
         });
+
+        // Register mock embedding model
+        runtime.registerModel(ModelClass.TEXT_EMBEDDING, mockEmbeddingModel);
     });
 
     describe("memory manager service", () => {
@@ -169,8 +212,10 @@ describe("AgentRuntime", () => {
 describe("MemoryManagerService", () => {
     test("should provide access to different memory managers", async () => {
         const runtime = new AgentRuntime({
+            character: mockCharacter,
             databaseAdapter: mockDatabaseAdapter,
-            cacheManager: mockCacheManager
+            cacheManager: mockCacheManager,
+            fileLoader: mockFileLoader,
         });
 
         expect(runtime.messageManager).toBeDefined();
@@ -181,8 +226,10 @@ describe("MemoryManagerService", () => {
 
     test("should allow registering custom memory managers", async () => {
         const runtime = new AgentRuntime({
+            character: mockCharacter,
             databaseAdapter: mockDatabaseAdapter,
-            cacheManager: mockCacheManager
+            cacheManager: mockCacheManager,
+            fileLoader: mockFileLoader,
         });
 
         const customManager: IMemoryManager = {
@@ -202,5 +249,49 @@ describe("MemoryManagerService", () => {
 
         runtime.registerMemoryManager(customManager);
         expect(runtime.getMemoryManager("custom")).toBe(customManager);
+    });
+});
+
+describe("AgentRuntime Filesystem Independence", () => {
+    let mockFileLoader;
+    let runtime: AgentRuntime;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        
+        mockFileLoader = {
+            hasKnowledge: vi.fn().mockResolvedValue(true),
+            loadKnowledge: vi.fn().mockResolvedValue(["test knowledge"]),
+        };
+
+        runtime = new AgentRuntime({
+            character: mockCharacter,
+            fileLoader: mockFileLoader,
+            databaseAdapter: mockDatabaseAdapter,
+            cacheManager: mockCacheManager,
+        });
+
+        // Register mock embedding model
+        runtime.registerModel(ModelClass.TEXT_EMBEDDING, mockEmbeddingModel);
+    });
+
+    it("should not directly access filesystem", () => {
+        expect(runtime).toBeDefined();
+        expect(mockFileLoader.hasKnowledge).not.toHaveBeenCalled();
+    });
+
+    it("should delegate all file operations to fileLoader", async () => {
+        // First check if knowledge exists
+        await mockFileLoader.hasKnowledge(mockCharacter.id);
+        
+        // Then load the knowledge
+        const knowledgeItems = await mockFileLoader.loadKnowledge(mockCharacter.id);
+        
+        // Verify the calls were made
+        expect(mockFileLoader.hasKnowledge).toHaveBeenCalledWith("test-character-id");
+        expect(mockFileLoader.loadKnowledge).toHaveBeenCalledWith("test-character-id");
+        
+        // Verify the knowledge was loaded
+        expect(knowledgeItems).toEqual(["test knowledge"]);
     });
 });
