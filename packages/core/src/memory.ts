@@ -6,6 +6,7 @@ import {
     type Memory,
     type UUID,
     type KnowledgeMetadata,
+    type MemoryType,
 } from "./types.ts";
 
 const defaultMatchThreshold = 0.1;
@@ -37,14 +38,24 @@ export class MemoryManager implements IMemoryManager {
     }
 
     private validateMetadata(metadata: KnowledgeMetadata): void {
-        // Validate source if present
-        if (metadata.source && typeof metadata.source !== 'string') {
-            throw new Error('Metadata source must be a string');
+        // Validate type is present and valid
+        if (!metadata.type || !["document", "fragment", "message", "fact"].includes(metadata.type)) {
+            throw new Error('Invalid memory type');
         }
 
         // Validate sourceId if present
         if (metadata.sourceId && typeof metadata.sourceId !== 'string') {
             throw new Error('Metadata sourceId must be a UUID string');
+        }
+
+        // Validate chunkIndex if present
+        if (metadata.chunkIndex !== undefined && typeof metadata.chunkIndex !== 'number') {
+            throw new Error('Metadata chunkIndex must be a number');
+        }
+
+        // Validate source if present
+        if (metadata.source && typeof metadata.source !== 'string') {
+            throw new Error('Metadata source must be a string');
         }
 
         // Validate scope if present
@@ -196,33 +207,34 @@ export class MemoryManager implements IMemoryManager {
             return;
         }
 
-        // Initialize metadata if not present for knowledge table
-        if (this.tableName === 'knowledge' && !memory.metadata) {
-            memory.metadata = {
-                source: 'knowledge',
-                scope: 'private',
+        // Initialize metadata for knowledge-type memories
+        if (!memory.content.metadata) {
+            memory.content.metadata = {
+                type: this.tableName === 'knowledge' ? 'document' : 'message', // Default type based on context
+                source: this.tableName,
+                scope: memory.agentId ? 'private' : 'shared',
                 timestamp: Date.now()
             };
         }
 
         // Handle metadata if present
-        if (memory.metadata) {
+        if (memory.content.metadata) {
             // Validate metadata
-            this.validateMetadata(memory.metadata);
+            this.validateMetadata(memory.content.metadata);
 
             // Ensure timestamp
-            if (!memory.metadata.timestamp) {
-                memory.metadata.timestamp = Date.now();
+            if (!memory.content.metadata.timestamp) {
+                memory.content.metadata.timestamp = Date.now();
             }
 
             // Set default scope if not present
-            if (!memory.metadata.scope) {
-                memory.metadata.scope = memory.agentId ? 'private' : 'shared';
+            if (!memory.content.metadata.scope) {
+                memory.content.metadata.scope = memory.agentId ? 'private' : 'shared';
             }
 
             // Set source if not present
-            if (!memory.metadata.source) {
-                memory.metadata.source = this.tableName;
+            if (!memory.content.metadata.source) {
+                memory.content.metadata.source = this.tableName;
             }
         }
 
@@ -234,9 +246,26 @@ export class MemoryManager implements IMemoryManager {
 
         await this.runtime.databaseAdapter.createMemory(
             memory,
-            this.tableName,
+            this.getTableNameForType(memory.content.metadata.type),
             unique
         );
+    }
+
+    /**
+     * Maps memory types to table names
+     */
+    private getTableNameForType(type: MemoryType): string {
+        switch (type) {
+            case 'document':
+            case 'fragment':
+                return 'knowledge';
+            case 'message':
+                return 'messages';
+            case 'fact':
+                return 'facts';
+            default:
+                return this.tableName; // Fallback to instance table name
+        }
     }
 
     async getMemoriesByRoomIds(params: { roomIds: UUID[], limit?: number; agentId?: UUID }): Promise<Memory[]> {

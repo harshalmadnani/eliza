@@ -286,20 +286,22 @@ export interface State {
  * Represents a stored memory/message
  */
 export interface Memory {
-  /** Optional unique identifier */
-  id?: UUID;
+  /** Unique identifier */
+  id: UUID;
 
   /** Associated user ID */
   userId: UUID;
 
-  /** Associated agent ID */
+  /** Associated agent ID - optional to allow querying across all agents */
   agentId?: UUID;
 
-  /** Optional creation timestamp */
-  createdAt?: number;
+  /** Creation timestamp */
+  createdAt: number;
 
   /** Memory content */
-  content: Content;
+  content: Content & {
+    metadata?: KnowledgeMetadata;
+  };
 
   /** Optional embedding vector */
   embedding?: number[];
@@ -312,9 +314,6 @@ export interface Memory {
 
   /** Embedding similarity score */
   similarity?: number;
-
-  /** Metadata for the knowledge */
-  metadata?: KnowledgeMetadata;
 }
 
 /**
@@ -1309,10 +1308,14 @@ export interface Task {
   validate?: (runtime: IAgentRuntime, message: Memory, state: State) => Promise<boolean>;
 }
 
+export type MemoryType = "document" | "fragment" | "message" | "fact";
+
 export interface KnowledgeMetadata {
-    source?: string;          // Source of the knowledge (e.g., "user", "file", "web")
-    sourceId?: UUID;          // ID of the source (e.g., file ID, message ID)
-    scope?: string;           // Scope of the knowledge (e.g., "public", "private", "room")
-    timestamp?: number;       // When the knowledge was created/updated
-    tags?: string[];         // Optional tags for categorization
+    type: MemoryType;
+    sourceId?: UUID;  // For fragments to reference their source document
+    chunkIndex?: number; // For ordering fragments
+    source?: string;  // General source info
+    scope?: 'shared' | 'private' | 'room';  // Access scope
+    timestamp?: number;  // Creation/update time
+    tags?: string[];  // Optional tags
 }
